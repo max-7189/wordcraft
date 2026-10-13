@@ -8,6 +8,8 @@
 //! Host → WordCraft:
 //! - `{type: "open", name, bytes}` (`bytes`: an `ArrayBuffer` or `Uint8Array`): opens the document
 //!   as if it had been picked, replacing the current one without asking (the host decides when).
+//! - `{type: "font", name, bytes}`: adds a font file (`.ttf`/`.otf`/…) as File › Options › Add Font
+//!   does, kept in the browser for later visits — e.g. a CJK face, which the web build doesn't embed.
 //! - `{type: "save"}`: File › Save.
 //! - `{type: "save-failed"}`: the host could not keep the last save; the document counts as
 //!   unsaved again.
@@ -32,6 +34,7 @@ const MAX_OPEN_BYTES: u32 = 200 << 20;
 /// What the host asked for, handled by the shell on its next frame.
 pub enum Request {
     Open { name: String, bytes: Vec<u8> },
+    Font { name: String, bytes: Vec<u8> },
     Save,
     SaveFailed,
 }
@@ -83,20 +86,28 @@ impl Host {
                 return;
             }
             let data = e.data();
-            let request = match text(&data, "type").as_deref() {
-                Some("open") => {
+            let kind = text(&data, "type");
+            let request = match kind.as_deref() {
+                Some(kind @ ("open" | "font")) => {
                     let bytes = js_sys::Reflect::get(&data, &JsValue::from_str("bytes")).unwrap_or(JsValue::UNDEFINED);
                     if !(bytes.is_instance_of::<js_sys::ArrayBuffer>() || bytes.is_instance_of::<js_sys::Uint8Array>()) {
-                        log::error!("embed: `open` needs `bytes` (ArrayBuffer or Uint8Array)");
+                        log::error!("embed: `{kind}` needs `bytes` (ArrayBuffer or Uint8Array)");
                         return;
                     }
                     let bytes = js_sys::Uint8Array::new(&bytes);
                     if bytes.length() == 0 || bytes.length() > MAX_OPEN_BYTES {
-                        log::error!("embed: `open` bytes are empty or larger than 200 MB");
+                        log::error!("embed: `{kind}` bytes are empty or larger than 200 MB");
                         return;
                     }
                     let name = text(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.docx".into());
-                    Request::Open { name, bytes: bytes.to_vec() }
+                    if kind == "open" {
+                        Request::Open { name, bytes: bytes.to_vec() }
+                    } else if wordcraft_fonts::is_font_file_name(&name.to_ascii_lowercase()) {
+                        Request::Font { name, bytes: bytes.to_vec() }
+                    } else {
+                        log::error!("embed: `font` needs a font file name (.ttf, .otf, …)");
+                        return;
+                    }
                 }
                 Some("save") => Request::Save,
                 Some("save-failed") => Request::SaveFailed,

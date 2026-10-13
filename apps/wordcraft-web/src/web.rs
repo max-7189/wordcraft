@@ -124,6 +124,8 @@ impl WebShell {
                     self.app.session.dirty = false;
                     self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                 }
+                // The inbox adds a font file as Add Font does (and keeps it in the browser).
+                host::Request::Font { name, bytes } => self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
                 host::Request::Save => {
                     if let Err(e) = self.app.run("file.save", serde_json::json!({})) {
                         log::error!("embed: save failed: {e}");
