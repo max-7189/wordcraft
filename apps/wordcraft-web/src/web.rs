@@ -12,6 +12,7 @@ const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt",
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 const RECIPIENT_EXTS: &[&str] = &["csv", "tsv", "txt", "xlsx", "xlsm", "ods"];
 mod font_store;
+mod host;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
@@ -28,7 +29,11 @@ pub fn start() {
         };
         let dirty = Rc::new(Cell::new(false));
         let saves = Rc::new(PickerSaves::default());
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        // Embedded (`?embed=<origin>`): the host page owns opening, saving and unsaved changes.
+        let host = host::Host::from_location();
+        if host.is_none()
+            && let Err(e) = guard_unload(dirty.clone(), saves.clone())
+        {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -58,13 +63,20 @@ pub fn start() {
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
-                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone()));
+                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), host.clone()));
                     app.autosave = false;
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    // Embedded, the host sends the document.
+                    if !sample && host.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, saves }))
+                    if let Some(host) = &host {
+                        match host.listen(cc.egui_ctx.clone()) {
+                            Ok(()) => host.ready(),
+                            Err(e) => log::error!("embed: can't listen to the host: {e}"),
+                        }
+                    }
+                    Ok(Box::new(WebShell { app, inbox, saves, host }))
                 }),
             )
             .await;
@@ -87,6 +99,7 @@ struct WebShell {
     app: WordApp,
     inbox: Inbox,
     saves: Rc<PickerSaves>,
+    host: Option<Rc<host::Host>>,
 }
 
 /// Saves the browser's save picker finishes after `download` has returned (#728). The app marks
@@ -101,6 +114,26 @@ struct PickerSaves {
 }
 
 impl WebShell {
+    /// The embedding page's requests ([`host`]).
+    fn serve_host(&mut self) {
+        let Some(host) = self.host.clone() else { return };
+        for request in host.take_requests() {
+            match request {
+                host::Request::Open { name, bytes } => {
+                    // The host replaces the document on purpose (a newer version): don't ask to save.
+                    self.app.session.dirty = false;
+                    self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                }
+                host::Request::Save => {
+                    if let Err(e) = self.app.run("file.save", serde_json::json!({})) {
+                        log::error!("embed: save failed: {e}");
+                    }
+                }
+                host::Request::SaveFailed => self.app.session.dirty = true,
+            }
+        }
+    }
+
     /// A picker save that didn't happen leaves the document with unsaved changes.
     fn settle_picker_saves(&mut self) {
         let unsaved = std::mem::take(&mut *self.saves.unsaved.borrow_mut());
@@ -138,6 +171,7 @@ impl eframe::App for WebShell {
             });
         }
         self.settle_picker_saves();
+        self.serve_host();
         self.app.logic(ctx);
     }
 
@@ -197,9 +231,10 @@ fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), St
 }
 
 /// `dirty` is the flag the `beforeunload` guard reads ([`guard_unload`]).
-fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<PickerSaves>) -> Services {
+fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<PickerSaves>, host: Option<Rc<host::Host>>) -> Services {
     let open_inbox = inbox.clone();
     let save_ctx = ctx.clone();
+    let save_host = host.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
@@ -224,10 +259,19 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<P
         })),
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
-        download: Some(Box::new(move |path: &str, bytes: &[u8]| download(&saves, &save_ctx, path, bytes))),
+        download: Some(Box::new(move |path: &str, bytes: &[u8]| match &save_host {
+            // Embedded: a Word document goes back to the host page; exports still download.
+            Some(host) if host::Host::keeps(path) => host.saved(path, bytes),
+            _ => download(&saves, &save_ctx, path, bytes),
+        })),
         print: Some(Box::new(print_pdf)),
         inbox: Some(inbox),
-        on_dirty: Some(Box::new(move |d| dirty.set(d))),
+        on_dirty: Some(Box::new(move |d| {
+            dirty.set(d);
+            if let Some(host) = &host {
+                host.dirty(d);
+            }
+        })),
         animations_enabled: Some(animations_enabled()),
         store_font: Some(Box::new(font_store::store)),
         forget_font: Some(Box::new(font_store::forget)),

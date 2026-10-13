@@ -1,0 +1,67 @@
+# Fork-only (PosseChat spike #1041): build the web app with the embedding bridge on Linux and
+# publish the static site as a prerelease asset. Not meant for upstream.
+name: Spike web build
+
+on:
+  push:
+    branches: [spike-1041]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spike-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: spike-web
+      - name: Install trunk 0.21.14
+        run: |
+          url="https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/trunk.tar.gz" "$url"
+          echo "f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b  $RUNNER_TEMP/trunk.tar.gz" | sha256sum -c -
+          tar -xz -C "$HOME/.cargo/bin" -f "$RUNNER_TEMP/trunk.tar.gz" trunk
+          trunk --version
+      - name: Clippy (wasm)
+        run: cargo clippy -p wordcraft-web --target wasm32-unknown-unknown --locked -- -D warnings
+      - name: Build
+        working-directory: apps/wordcraft-web
+        run: trunk build --release
+      - name: Package
+        run: |
+          short=$(git rev-parse --short=10 HEAD)
+          name="wordcraft-web-spike-1041-$short"
+          mkdir -p "out/$name"
+          cp -R dist/web/. "out/$name/"
+          cp packaging/web/_headers packaging/web/.htaccess "out/$name/"
+          (cd out && zip -qr9 "$name.zip" "$name" && sha256sum "$name.zip" > "$name.zip.sha256")
+          ls -l "out/$name" out/*.zip
+          for f in out/$name/*.wasm; do echo "$f raw=$(stat -c%s "$f") gzip9=$(gzip -9c "$f" | wc -c)"; done
+          echo "NAME=$name" >> "$GITHUB_ENV"
+          echo "SHORT=$short" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: out/${{ env.NAME }}.zip*
+      - name: Prerelease asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "spike-1041-${SHORT}" out/$NAME.zip out/$NAME.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "spike-1041 web ${SHORT}" --notes "Web build of $GITHUB_SHA (embedding bridge, PosseChat spike #1041)."
