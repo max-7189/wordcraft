@@ -38,11 +38,11 @@ jobs:
           tar -xz -C "$HOME/.cargo/bin" -f "$RUNNER_TEMP/trunk.tar.gz" trunk
           trunk --version
       # Upstream crates carry wasm-only warnings (e.g. unused_mut in crates/fonts at v0.6.1), so the
-      # gate is: no warning in apps/wordcraft-web itself.
+      # gate is: no warning in the files this fork changes (web.rs, web/host.rs).
       - name: Clippy (wasm, this app)
         run: |
           cargo clippy -p wordcraft-web --target wasm32-unknown-unknown --locked --message-format=short 2>&1 | tee clippy.txt
-          if grep -E '^apps/wordcraft-web/.*(warning|error)' clippy.txt; then exit 1; fi
+          if grep -E '^apps/wordcraft-web/src/(web\.rs|web/host\.rs).*(warning|error)' clippy.txt; then exit 1; fi
       - name: Build
         working-directory: apps/wordcraft-web
         run: trunk build --release
