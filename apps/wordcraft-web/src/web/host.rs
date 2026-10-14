@@ -5,6 +5,10 @@
 //! origin of the embedding page (`https://example.com`). Messages (`window.postMessage`) are
 //! accepted only from `window.parent` at exactly that origin, and sent only to it.
 //!
+//! `&lang=<tag>` (e.g. `zh-Hans`, `en`) sets the interface language, as the embedding page shows its
+//! own; the browser's language is used without it. Embedded, the title bar row (quick access,
+//! command search, account) is hidden: the host page has its own header.
+//!
 //! Host → WordCraft:
 //! - `{type: "open", name, bytes}` (`bytes`: an `ArrayBuffer` or `Uint8Array`): opens the document
 //!   as if it had been picked, replacing the current one without asking (the host decides when).
@@ -44,6 +48,8 @@ pub enum Request {
 
 pub struct Host {
     origin: String,
+    /// The interface language the host asked for (`&lang=`).
+    pub lang: Option<String>,
     requests: RefCell<Vec<Request>>,
     dirty: Cell<Option<bool>>,
 }
@@ -63,14 +69,16 @@ impl Host {
     /// The bridge, when this page is framed and was loaded with `?embed=<origin>`.
     pub fn from_location() -> Option<Rc<Host>> {
         let search = web_sys::window()?.location().search().ok()?;
-        let origin = web_sys::UrlSearchParams::new_with_str(&search).ok()?.get("embed")?;
+        let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+        let origin = params.get("embed")?;
+        let lang = params.get("lang").filter(|l| !l.trim().is_empty());
         // A wildcard would hand the document to whoever frames the page.
         if origin.is_empty() || origin == "*" || origin == "null" {
             log::error!("embed: an exact origin is required (?embed=https://example.com)");
             return None;
         }
         parent_window()?;
-        Some(Rc::new(Host { origin, requests: RefCell::new(Vec::new()), dirty: Cell::new(None) }))
+        Some(Rc::new(Host { origin, lang, requests: RefCell::new(Vec::new()), dirty: Cell::new(None) }))
     }
 
     /// Start accepting the host's messages; each one wakes the app.

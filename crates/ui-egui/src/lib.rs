@@ -364,6 +364,9 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
+    /// The title bar row (quick access, document name, command search, account). An embedding
+    /// page that has its own header turns it off; the ribbon, shortcuts and Backstage stay.
+    pub show_title_bar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
@@ -468,6 +471,7 @@ impl WordApp {
             status_msg: None,
             previews: previews::Previews::default(),
             integrated_titlebar: false,
+            show_title_bar: true,
             control_rx: None,
             shot_token: 0,
             queued_shots: Vec::new(),
@@ -1517,7 +1521,9 @@ impl WordApp {
         if self.ui.backstage {
             backstage::show(self, ui);
         } else {
-            chrome::title_bar(self, ui);
+            if self.show_title_bar {
+                chrome::title_bar(self, ui);
+            }
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
             panes::show(self, ui);

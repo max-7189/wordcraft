@@ -71,6 +71,12 @@ pub fn start() {
                         app.start_screen();
                     }
                     if let Some(host) = &host {
+                        app.show_title_bar = false;
+                        if let Some(lang) = host.lang.as_deref().and_then(wordcraft_ui_egui::i18n::lang_from_tag)
+                            && let Err(e) = app.run("ui.language", serde_json::json!({"value": lang.code()}))
+                        {
+                            log::error!("embed: can't set the interface language: {e}");
+                        }
                         match host.listen(cc.egui_ctx.clone()) {
                             Ok(()) => host.ready(),
                             Err(e) => log::error!("embed: can't listen to the host: {e}"),
