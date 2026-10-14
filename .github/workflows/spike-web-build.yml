@@ -48,7 +48,7 @@ jobs:
           set -o pipefail
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
-          cargo test -p wordcraft-ui-egui --lib --locked -- ribbon::tests::compact ribbon::tests::ribbon_layout tests::single_document 2>&1 | tee ui-tests.txt
+          cargo test -p wordcraft-ui-egui --lib --locked -- ribbon::tests::compact ribbon::tests::ribbon_layout tests::single_document chrome::tests::status_compact chrome::tests::compact_status_bar 2>&1 | tee ui-tests.txt
       - name: Build
         working-directory: apps/wordcraft-web
         run: trunk build --release

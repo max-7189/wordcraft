@@ -344,8 +344,20 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// Below this window width the full status bar cannot lay out without overlapping itself.
+pub const STATUS_COMPACT_BELOW: f32 = 640.0;
+
+/// Whether the status bar is drawn compact in a window `width` points wide: with the compact ribbon
+/// (an embedding page's small pane), or when the full bar does not fit.
+pub fn status_compact(app: &WordApp, width: f32) -> bool {
+    app.ribbon_layout.compact_at(width) || width < STATUS_COMPACT_BELOW
+}
+
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    if status_compact(app, ui.ctx().content_rect().width()) {
+        return status_bar_compact(app, ui, &t);
+    }
     egui::Panel::bottom("status")
         .exact_size(26.0)
         .frame(
@@ -489,6 +501,100 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// The compact status bar: the page (`3/12`), a transient status message and the zoom with its
+/// buttons; the word count, the language, Focus and the view modes sit behind a ⋯ button.
+fn status_bar_compact(app: &mut WordApp, ui: &mut Ui, t: &Tokens) {
+    egui::Panel::bottom("status")
+        .exact_size(26.0)
+        .frame(
+            egui::Frame::NONE
+                .fill(t.status_bar)
+                .inner_margin(egui::Margin { left: 10, right: 8, top: 0, bottom: 0 })
+                .stroke(Stroke::new(1.0, t.border)),
+        )
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+                let font = TypeRung::Caption.regular();
+                let track = TypeRung::Caption.tracking();
+                let l = app.session.layout();
+                let page = l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1);
+                let ptxt = format!("{page}/{}", l.pages.len());
+                let pw = text_width(ui.painter(), &ptxt, &font, track, t.text_dim);
+                let (pr, presp) = ui.allocate_exact_size(vec2(pw + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                paint_text(ui.painter(), pos2(pr.min.x, pr.min.y), Align2::LEFT_TOP, &ptxt, &font, track, t.text_dim);
+                let full = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]);
+                if presp.on_hover_text(full).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "goto"}));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+                    let more = crate::widgets::icon_button(ui, "more", tl!("More commands"));
+                    egui::Popup::menu(&more).show(|ui| {
+                        ui.set_min_width(200.0);
+                        let words = app.cached_word_count();
+                        if ui.button(crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])).clicked() {
+                            let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
+                            ui.close();
+                        }
+                        let lang = crate::ribbon::caret_language(app);
+                        ui.menu_button(format!("{}: {lang}", tl!("Language")), |ui| crate::ribbon::language_menu(ui, app));
+                        if ui.button(tl!("Focus")).clicked() {
+                            let _ = app.run("view.focus", json!({}));
+                            ui.close();
+                        }
+                        ui.separator();
+                        let mode = app.session.view.mode;
+                        let read = app.session.view.read_mode;
+                        for (label, id, on) in [
+                            (tl!("Web Layout"), "view.webLayout", mode == wordcraft_layout::ViewMode::Web),
+                            (tl!("Print Layout"), "view.printLayout", mode == wordcraft_layout::ViewMode::Print && !read),
+                            (tl!("Read Mode"), "view.readMode", read),
+                        ] {
+                            if ui.selectable_label(on, label).clicked() {
+                                let _ = app.run(id, json!({}));
+                                ui.close();
+                            }
+                        }
+                    });
+                    let reading = app.session.view.read_mode;
+                    let z = (if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT } * 100.0).round();
+                    if small_icon(ui, "plus", tl!("Zoom In")) {
+                        if reading {
+                            let _ = app.run("view.readTextSize", json!({"value": (z + 10.0).min(150.0)}));
+                        } else {
+                            let _ = app.run("view.zoomIn", json!({}));
+                        }
+                    }
+                    let ztxt = format!("{z}%");
+                    let zw = text_width(ui.painter(), &ztxt, &font, track, t.text_dim);
+                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                    paint_text(ui.painter(), pos2(zr.min.x, zr.min.y), Align2::LEFT_TOP, &ztxt, &font, track, t.text_dim);
+                    if zresp.clicked() && !reading {
+                        let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
+                    }
+                    if small_icon(ui, "minus", tl!("Zoom Out")) {
+                        if reading {
+                            let _ = app.run("view.readTextSize", json!({"value": (z - 10.0).max(75.0)}));
+                        } else {
+                            let _ = app.run("view.zoomOut", json!({}));
+                        }
+                    }
+                    // A transient message (a save, an error) takes what room is left, clipped.
+                    if let Some((msg, at)) = &app.status_msg
+                        && crate::now_ms() - at < 6000.0
+                    {
+                        let room = ui.available_width() - 6.0;
+                        if room > 24.0 {
+                            let (r, _) = ui.allocate_exact_size(vec2(room, TypeRung::Caption.line_height()), Sense::hover());
+                            ui.painter().with_clip_rect(r).text(r.left_center(), Align2::LEFT_CENTER, msg, font.clone(), t.accent_text);
+                        }
+                    }
+                });
+            });
+        });
+}
+
 fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
@@ -514,6 +620,64 @@ impl WordApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The status bar goes compact with the compact ribbon (an embedding page's pane) and wherever the
+    /// full bar would overlap itself; the full bar comes back with the full ribbon (an expanded pane).
+    #[test]
+    fn status_compact_follows_the_ribbon_and_the_width() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        assert!(!status_compact(&a, 1400.0), "the standalone app at a normal width keeps the full bar");
+        assert!(status_compact(&a, 500.0), "too narrow for the full bar");
+        a.ribbon_layout = crate::RibbonLayout::Auto(1000.0);
+        for w in [480.0, 600.0, 700.0] {
+            assert!(status_compact(&a, w), "{w}: a pane");
+        }
+        assert!(!status_compact(&a, 1400.0), "an expanded pane");
+        a.ribbon_layout = crate::RibbonLayout::Full;
+        assert!(!status_compact(&a, 874.0), "the host asked for the full ribbon (expanded) at 874 pt");
+    }
+
+    /// The compact bar draws at pane widths without the word count or the language on the bar itself,
+    /// and everything on it stays inside the window.
+    #[test]
+    fn compact_status_bar_fits_pane_widths() {
+        for width in [480.0, 600.0, 700.0] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Some words here")), crate::Services::default());
+            a.ribbon_layout = crate::RibbonLayout::Compact;
+            let mut frames = 0;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 120.0)).build_ui(|ui| {
+                if frames == 0 {
+                    crate::theme::install_fonts(ui.ctx());
+                } else {
+                    status_bar(&mut a, ui);
+                }
+                frames += 1;
+            });
+            h.run_steps(3);
+            fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                    _ => {}
+                }
+            }
+            let mut texts = Vec::new();
+            for clipped in &h.output().shapes {
+                collect(&clipped.shape, &mut texts);
+            }
+            drop(h);
+            assert!(!texts.iter().any(|(s, _)| s.contains("words")), "{width}: no word count on the compact bar: {texts:?}");
+            assert!(texts.iter().any(|(s, _)| s == "1/1"), "{width}: the page: {texts:?}");
+            for (s, r) in &texts {
+                assert!(r.max.x <= width + 0.5, "{width}: '{s}' ends at {} past the window", r.max.x);
+            }
+            let mut rects: Vec<_> = texts.iter().map(|(_, r)| *r).collect();
+            rects.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            for pair in rects.windows(2) {
+                assert!(!pair[0].intersects(pair[1]), "{width}: overlapping text {pair:?}");
+            }
+        }
+    }
 
     fn ctx() -> egui::Context {
         let ctx = egui::Context::default();
