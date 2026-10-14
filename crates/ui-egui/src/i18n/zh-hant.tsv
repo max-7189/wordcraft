@@ -1013,6 +1013,7 @@
 	Scroll ribbon left	向左捲動功能區
 	Scroll ribbon right	向右捲動功能區
 	More commands	更多命令
+	Not available here: this editor keeps to the document it was given.	此處無法使用:此編輯器只編輯交給它的文件。
 # Equations.
 	Change Structure	變更結構
 	Change to Display	變更為顯示方程式

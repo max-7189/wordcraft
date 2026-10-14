@@ -1012,6 +1012,7 @@
 	Scroll ribbon left	リボンを左にスクロール
 	Scroll ribbon right	リボンを右にスクロール
 	More commands	その他のコマンド
+	Not available here: this editor keeps to the document it was given.	ここでは使用できません:このエディターは渡された文書だけを編集します。
 # Equations.
 	Change Structure	構造の変更
 	Change to Display	別行表示に変更

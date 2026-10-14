@@ -638,17 +638,18 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A single-document app refuses, before any dialog asks for details, what would replace its document.
+        if self.single_document && !self.opening_from_inbox && discards_document(id, &params) {
+            let msg = tl!("Not available here: this editor keeps to the document it was given.").to_string();
+            self.status(msg.clone());
+            return Err(msg);
+        }
         // A button whose command needs input the user hasn't given yet opens its dialog (#240).
         if let Some(name) = input_dialog(id, &params)
             && widgets::enabled(self, id)
         {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
-        }
-        if self.single_document && !self.opening_from_inbox && discards_document(id, &params) {
-            let msg = tl!("Not available here: this editor keeps to the document it was given.").to_string();
-            self.status(msg.clone());
-            return Err(msg);
         }
         if self.session.dirty && discards_document(id, &params) {
             let name =
