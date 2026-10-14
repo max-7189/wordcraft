@@ -25,7 +25,8 @@
 //!   unsaved again.
 //!
 //! WordCraft → host:
-//! - `{type: "ready"}` once the app runs (send `open` after it);
+//! - `{type: "ready"}` once the app runs (send `open` after it); `{type: "error", message}` when it
+//!   could not start (no WebGPU or WebGL2 — `?webgl` may help where WebGPU misbehaves);
 //! - `{type: "dirty", dirty}` whenever "has unsaved changes" flips;
 //! - `{type: "saved", name, bytes}` on every Save of a Word document (Ctrl+S, the ribbon, or a
 //!   `save` request), with the `ArrayBuffer` transferred. Exports and saves in other formats still
@@ -155,6 +156,11 @@ impl Host {
 
     pub fn ready(&self) {
         self.post(&[("type", JsValue::from_str("ready"))], None);
+    }
+
+    /// The app could not start.
+    pub fn failed(&self, message: &str) {
+        self.post(&[("type", JsValue::from_str("error")), ("message", JsValue::from_str(message))], None);
     }
 
     /// Called after every pass; tells the host only when the flag changes.

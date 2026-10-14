@@ -42,6 +42,7 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        let failed_host = host.clone();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -90,7 +91,12 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>WordCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => {
+                    el.set_inner_html(&format!("<p>WordCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"));
+                    if let Some(host) = &failed_host {
+                        host.failed(&format!("{e:?}"));
+                    }
+                }
             }
         }
     });
