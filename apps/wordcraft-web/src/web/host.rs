@@ -8,8 +8,11 @@
 //! Host → WordCraft:
 //! - `{type: "open", name, bytes}` (`bytes`: an `ArrayBuffer` or `Uint8Array`): opens the document
 //!   as if it had been picked, replacing the current one without asking (the host decides when).
-//! - `{type: "font", name, bytes}`: adds a font file (`.ttf`/`.otf`/…) as File › Options › Add Font
-//!   does, kept in the browser for later visits — e.g. a CJK face, which the web build doesn't embed.
+//! - `{type: "font", name, bytes, document?}`: a font file (`.ttf`/`.otf`/…) for the interface — a
+//!   fallback after the embedded faces, so a Chinese or Japanese interface doesn't draw boxes (the
+//!   web build embeds no CJK face and can't read system fonts) — and, unless `document: false`,
+//!   for documents too, added as File › Options › Add Font does and kept in the browser. The
+//!   interface needs it on every visit; documents get it back from the browser's storage.
 //! - `{type: "save"}`: File › Save.
 //! - `{type: "save-failed"}`: the host could not keep the last save; the document counts as
 //!   unsaved again.
@@ -34,7 +37,7 @@ const MAX_OPEN_BYTES: u32 = 200 << 20;
 /// What the host asked for, handled by the shell on its next frame.
 pub enum Request {
     Open { name: String, bytes: Vec<u8> },
-    Font { name: String, bytes: Vec<u8> },
+    Font { name: String, bytes: Vec<u8>, document: bool },
     Save,
     SaveFailed,
 }
@@ -103,7 +106,8 @@ impl Host {
                     if kind == "open" {
                         Request::Open { name, bytes: bytes.to_vec() }
                     } else if wordcraft_fonts::is_font_file_name(&name.to_ascii_lowercase()) {
-                        Request::Font { name, bytes: bytes.to_vec() }
+                        let document = js_sys::Reflect::get(&data, &JsValue::from_str("document")).ok().and_then(|v| v.as_bool()).unwrap_or(true);
+                        Request::Font { name, bytes: bytes.to_vec(), document }
                     } else {
                         log::error!("embed: `font` needs a font file name (.ttf, .otf, …)");
                         return;

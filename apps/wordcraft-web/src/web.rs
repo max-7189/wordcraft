@@ -76,7 +76,7 @@ pub fn start() {
                             Err(e) => log::error!("embed: can't listen to the host: {e}"),
                         }
                     }
-                    Ok(Box::new(WebShell { app, inbox, saves, host }))
+                    Ok(Box::new(WebShell { app, inbox, saves, host, ui_fonts: Vec::new() }))
                 }),
             )
             .await;
@@ -100,6 +100,8 @@ struct WebShell {
     inbox: Inbox,
     saves: Rc<PickerSaves>,
     host: Option<Rc<host::Host>>,
+    /// Interface fallback faces from the host (name, bytes), kept installed ([`WebShell::keep_ui_fonts`]).
+    ui_fonts: Vec<(String, &'static [u8])>,
 }
 
 /// Saves the browser's save picker finishes after `download` has returned (#728). The app marks
@@ -114,6 +116,18 @@ struct PickerSaves {
 }
 
 impl WebShell {
+    /// The app reinstalls the interface fonts now and then (language, input method), which drops
+    /// faces added from outside; adding one that is installed is a no-op, so this runs every pass.
+    fn keep_ui_fonts(&self, ctx: &egui::Context) {
+        for (name, bytes) in &self.ui_fonts {
+            let families = [egui::FontFamily::Proportional, egui::FontFamily::Name("medium".into()), egui::FontFamily::Name("semibold".into())]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily { family, priority: egui::epaint::text::FontPriority::Lowest })
+                .collect();
+            ctx.add_font(egui::epaint::text::FontInsert::new(name, egui::FontData::from_static(bytes), families));
+        }
+    }
+
     /// The embedding page's requests ([`host`]).
     fn serve_host(&mut self) {
         let Some(host) = self.host.clone() else { return };
@@ -124,8 +138,15 @@ impl WebShell {
                     self.app.session.dirty = false;
                     self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                 }
-                // The inbox adds a font file as Add Font does (and keeps it in the browser).
-                host::Request::Font { name, bytes } => self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes)),
+                host::Request::Font { name, bytes, document } => {
+                    if document {
+                        // The inbox adds a font file as Add Font does (and keeps it in the browser).
+                        self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name.clone(), bytes.clone()));
+                    }
+                    // Lives as long as the page: egui keeps a reference to every installed face.
+                    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+                    self.ui_fonts.push((format!("host {name}"), bytes));
+                }
                 host::Request::Save => {
                     if let Err(e) = self.app.run("file.save", serde_json::json!({})) {
                         log::error!("embed: save failed: {e}");
@@ -174,6 +195,7 @@ impl eframe::App for WebShell {
         }
         self.settle_picker_saves();
         self.serve_host();
+        self.keep_ui_fonts(ctx);
         self.app.logic(ctx);
     }
 
