@@ -146,6 +146,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         reading_toolbar(app, ui, t);
         return;
     }
+    if app.ribbon_layout.compact_at(ui.ctx().content_rect().width()) {
+        compact(app, ui, &t);
+        return;
+    }
     // Editing an equation brings up the Equation tab; leaving it goes back.
     if app.session.math.is_some() {
         if app.equation_prev_tab.is_none() {
@@ -337,6 +341,144 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 state.offset.x = x.clamp(0.0, overflow.max(0.0));
                 state.store(ui.ctx(), scroll.id);
             }
+        });
+}
+
+/// The compact ribbon's ⋯ button.
+const COMPACT_MORE_W: f32 = 28.0;
+/// Gap between the compact ribbon's items.
+const COMPACT_GAP: f32 = 2.0;
+
+/// How many of the compact ribbon's items (by width, in order) fit in `avail` points: all of them,
+/// or as many as fit with room left for the ⋯ button that holds the rest.
+pub(crate) fn compact_fit(avail: f32, widths: &[f32]) -> usize {
+    let total: f32 = widths.iter().map(|w| w + COMPACT_GAP).sum();
+    if total <= avail {
+        return widths.len();
+    }
+    let mut used = COMPACT_MORE_W + COMPACT_GAP;
+    widths.iter().take_while(|w| { used += *w + COMPACT_GAP; used <= avail }).count()
+}
+
+type CompactItem<'a> = (f32, Box<dyn FnOnce(&mut Ui, &mut WordApp) + 'a>);
+
+/// The compact ribbon ([`crate::RibbonLayout::Compact`]): one row of everyday commands, drawn with
+/// the Home and Insert tabs' own buttons, and a ⋯ button holding the ones that don't fit. The
+/// keyboard shortcuts and Backstage (File) keep everything else reachable.
+fn compact(app: &mut WordApp, ui: &mut Ui, t: &Tokens) {
+    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+    let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
+    let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
+    let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
+    let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+    let size = st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") }).unwrap_or_default();
+    let (bold, italic, underline) = (flag("bold"), flag("italic"), flag("underline"));
+    let gap = || -> CompactItem<'static> { (6.0, Box::new(|ui: &mut Ui, _: &mut WordApp| ui.add_space(6.0))) };
+    let button = |icon: &'static str, tip: &'static str, id: &'static str, on: bool| -> CompactItem<'static> {
+        (24.0, Box::new(move |ui: &mut Ui, app: &mut WordApp| {
+            small(ui, app, icon, None, tip, id, json!({}), on);
+        }))
+    };
+    use wordcraft_doc::Align as A;
+    let mut items: Vec<CompactItem> = vec![
+        button("undo", "Undo", "edit.undo", false),
+        button("redo", "Redo", "edit.redo", false),
+        gap(),
+        (124.0, Box::new(move |ui: &mut Ui, app: &mut WordApp| {
+            let font = app.previews.font_shown(&font);
+            let fams = app.previews.families();
+            let prev = app.previews.font_preview_fn();
+            if let Some(f) = font_combo(ui, "font", 120.0, &font, &fams, Some(&*prev)) {
+                let _ = if f == crate::widgets::ADD_FONT {
+                    app.run("font.add", json!({}))
+                } else {
+                    let f = app.previews.font_stored(&f);
+                    app.run("format.font", json!({"name": f}))
+                };
+            }
+        })),
+        (50.0, Box::new(move |ui: &mut Ui, app: &mut WordApp| {
+            let sizes: Vec<String> =
+                wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
+            if let Some(v) = combo(ui, "size", 46.0, &size, &sizes, None)
+                && let Ok(x) = v.trim().parse::<f64>()
+            {
+                let _ = app.run("format.size", json!({"size": x}));
+            }
+        })),
+        gap(),
+        button("bold", "Bold", "format.bold", bold),
+        button("italic", "Italic", "format.italic", italic),
+        button("underline", "Underline", "format.underline", underline),
+        (35.0, Box::new(|ui: &mut Ui, app: &mut WordApp| {
+            let fc = app.canvas.last_font_color.clone();
+            let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
+            split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
+                mi(ui, app, "Automatic", "format.color", json!({"color": "auto"}));
+                let theme = app.session.doc.settings.theme_colors.clone();
+                crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
+            });
+        })),
+        (35.0, Box::new(|ui: &mut Ui, app: &mut WordApp| {
+            let hl = app.canvas.last_highlight.clone();
+            split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+                for h in wordcraft_doc::props::Highlight::ALL.iter().skip(1) {
+                    if ui.button(h.name()).clicked() {
+                        app.canvas.last_highlight = h.ooxml().to_string();
+                        let _ = app.run("format.highlight", json!({"color": h.ooxml()}));
+                        ui.close();
+                    }
+                }
+                mi(ui, app, "No Color", "format.highlight", json!({"color": "none"}));
+            });
+        })),
+        gap(),
+        button("alignLeft", "Align Left", "para.alignLeft", align == A::Left),
+        button("alignCenter", "Center", "para.alignCenter", align == A::Center),
+        button("alignRight", "Align Right", "para.alignRight", align == A::Right),
+        button("justify", "Justify", "para.justify", align == A::Justify),
+        gap(),
+        button("bullets", "Bullets", "para.bullets", lists.bullets),
+        button("numbering", "Numbering", "para.numbering", lists.numbering),
+        button("outdent", "Decrease Indent", "para.outdent", false),
+        button("indent", "Increase Indent", "para.indent", false),
+        gap(),
+        (34.0, Box::new(|ui: &mut Ui, app: &mut WordApp| {
+            menu_button(ui, app, "table", None, "Add a Table", false, "insert.table", |ui, app| {
+                crate::dialogs::table_grid_picker(ui, app);
+                ui.separator();
+                mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
+            });
+        })),
+        button("find", "Find", "edit.find", false),
+    ];
+    egui::Panel::top("ribbon_compact")
+        .exact_size(34.0)
+        .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 }).stroke(Stroke::new(1.0, t.border)))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing = vec2(COMPACT_GAP, 0.0);
+                let widths: Vec<f32> = items.iter().map(|(w, _)| *w).collect();
+                let fit = compact_fit(ui.available_width(), &widths);
+                let rest = items.split_off(fit);
+                for (_, draw) in items {
+                    draw(ui, app);
+                }
+                if rest.is_empty() {
+                    return;
+                }
+                let more = ui.add_sized(vec2(COMPACT_MORE_W - 4.0, 22.0), egui::Button::new("⋯").frame(false)).on_hover_text(tl!("More commands"));
+                egui::Popup::menu(&more).show(|ui| {
+                    ui.set_max_width(280.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(COMPACT_GAP, 4.0);
+                        for (_, draw) in rest {
+                            draw(ui, app);
+                        }
+                    });
+                });
+            });
         });
 }
 
@@ -2398,6 +2540,52 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
 mod tests {
     use super::*;
     use wordcraft_engine::Session;
+
+    /// The compact ribbon keeps every item while they fit, else as many as fit beside ⋯.
+    #[test]
+    fn compact_fit_leaves_room_for_more() {
+        let w = [24.0, 24.0, 124.0, 50.0];
+        assert_eq!(compact_fit(1000.0, &w), 4);
+        // 24+2 + 24+2 + 124+2 + 50+2 = 230: fits exactly.
+        assert_eq!(compact_fit(230.0, &w), 4);
+        // One short: ⋯ (28+2) and the first two (26+26) fit, the font box (126) doesn't.
+        assert_eq!(compact_fit(229.0, &w), 2);
+        assert_eq!(compact_fit(10.0, &w), 0);
+    }
+
+    /// `RibbonLayout` from an embedding page's parameter, and which layout a width gets.
+    #[test]
+    fn ribbon_layout_parses_and_follows_the_width() {
+        use crate::RibbonLayout;
+        assert_eq!(RibbonLayout::parse("compact"), Some(RibbonLayout::Compact));
+        assert_eq!(RibbonLayout::parse("full"), Some(RibbonLayout::Full));
+        assert_eq!(RibbonLayout::parse("auto"), Some(RibbonLayout::Auto(1000.0)));
+        assert_eq!(RibbonLayout::parse("auto:720"), Some(RibbonLayout::Auto(720.0)));
+        assert_eq!(RibbonLayout::parse("auto:-3"), None);
+        assert_eq!(RibbonLayout::parse("wide"), None);
+        assert!(RibbonLayout::Auto(1000.0).compact_at(700.0));
+        assert!(!RibbonLayout::Auto(1000.0).compact_at(1400.0));
+        assert!(RibbonLayout::Compact.compact_at(5000.0));
+        assert!(!RibbonLayout::Full.compact_at(300.0));
+    }
+
+    /// The compact row draws at pane widths without the tab strip, and the full ribbon comes back
+    /// when the window is wide (an expanded pane).
+    #[test]
+    fn compact_ribbon_draws_one_row_and_auto_switches() {
+        for (width, compact) in [(420.0, true), (760.0, true), (1400.0, false)] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+            app.ribbon_layout = crate::RibbonLayout::Auto(1000.0);
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 300.0)).build_ui(|ui| show(&mut app, ui));
+            h.run_steps(2);
+            // Strikethrough is on the full Home tab only; Bold is on both.
+            let full = h.query_by_label(tl!("Strikethrough")).is_some();
+            let bold = h.query_by_label(tl!("Bold")).is_some();
+            drop(h);
+            assert_eq!(!full, compact, "{width}: full ribbon shown = {full}");
+            assert!(bold, "{width}: Bold is on the first row");
+        }
+    }
 
     fn png_data() -> String {
         let img = image::RgbaImage::from_fn(20, 10, |x, y| {

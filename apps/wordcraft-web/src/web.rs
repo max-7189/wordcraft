@@ -72,6 +72,7 @@ pub fn start() {
                     }
                     if let Some(host) = &host {
                         app.show_title_bar = false;
+                        app.ribbon_layout = host.ribbon;
                         if let Some(lang) = host.lang.as_deref().and_then(wordcraft_ui_egui::i18n::lang_from_tag)
                             && let Err(e) = app.run("ui.language", serde_json::json!({"value": lang.code()}))
                         {
@@ -159,6 +160,7 @@ impl WebShell {
                     }
                 }
                 host::Request::SaveFailed => self.app.session.dirty = true,
+                host::Request::Ribbon(layout) => self.app.ribbon_layout = layout,
             }
         }
     }

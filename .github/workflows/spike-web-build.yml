@@ -4,7 +4,7 @@ name: Spike web build
 
 on:
   push:
-    branches: [spike-1041]
+    branches: [spike-1041, embed-compact-ribbon]
   workflow_dispatch:
 
 permissions:
@@ -43,13 +43,19 @@ jobs:
         run: |
           cargo clippy -p wordcraft-web --target wasm32-unknown-unknown --locked --message-format=short 2>&1 | tee clippy.txt
           if grep -E '^apps/wordcraft-web/src/(web\.rs|web/host\.rs).*(warning|error)' clippy.txt; then exit 1; fi
+      - name: Embed-mode UI tests (compact ribbon)
+        run: |
+          set -o pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+          cargo test -p wordcraft-ui-egui --lib --locked -- ribbon::tests::compact ribbon::tests::ribbon_layout 2>&1 | tee ui-tests.txt
       - name: Build
         working-directory: apps/wordcraft-web
         run: trunk build --release
       - name: Package
         run: |
           short=$(git rev-parse --short=10 HEAD)
-          name="wordcraft-web-spike-1041-$short"
+          name="wordcraft-web-${GITHUB_REF_NAME}-$short"
           mkdir -p "out/$name"
           cp -R dist/web/. "out/$name/"
           cp packaging/web/_headers packaging/web/.htaccess "out/$name/"
@@ -66,6 +72,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "spike-1041-${SHORT}" out/$NAME.zip out/$NAME.zip.sha256 \
+          gh release create "${GITHUB_REF_NAME}-${SHORT}" out/$NAME.zip out/$NAME.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
-            --title "spike-1041 web ${SHORT}" --notes "Web build of $GITHUB_SHA (embedding bridge, PosseChat spike #1041)."
+            --title "${GITHUB_REF_NAME} web ${SHORT}" --notes "Web build of $GITHUB_SHA (embedding bridge, PosseChat spike #1041)."

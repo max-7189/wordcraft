@@ -157,6 +157,41 @@ pub enum DefaultApp {
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// How the ribbon is drawn ([`WordApp::ribbon_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RibbonLayout {
+    /// Tabs and the full ribbon (the default).
+    Full,
+    /// One row of everyday commands (undo/redo, font, size, bold/italic/underline, colours,
+    /// alignment, lists, indent, table, find); what doesn't fit goes behind a ⋯ button. For an
+    /// embedding page with a small pane.
+    Compact,
+    /// Compact while the window is narrower than this many points, full otherwise — an embedded
+    /// pane that can be expanded gets the full ribbon when it is.
+    Auto(f32),
+}
+
+impl RibbonLayout {
+    /// `compact`, `full`, `auto` (compact below 1000 pt) or `auto:<points>`; anything else is `None`.
+    pub fn parse(s: &str) -> Option<RibbonLayout> {
+        match s.trim() {
+            "full" => Some(RibbonLayout::Full),
+            "compact" => Some(RibbonLayout::Compact),
+            "auto" => Some(RibbonLayout::Auto(1000.0)),
+            other => other.strip_prefix("auto:").and_then(|w| w.parse::<f32>().ok()).filter(|w| w.is_finite() && *w > 0.0).map(RibbonLayout::Auto),
+        }
+    }
+
+    /// Whether the compact row is drawn in a window `width` points wide.
+    pub fn compact_at(self, width: f32) -> bool {
+        match self {
+            RibbonLayout::Full => false,
+            RibbonLayout::Compact => true,
+            RibbonLayout::Auto(below) => width < below,
+        }
+    }
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -367,6 +402,8 @@ pub struct WordApp {
     /// The title bar row (quick access, document name, command search, account). An embedding
     /// page that has its own header turns it off; the ribbon, shortcuts and Backstage stay.
     pub show_title_bar: bool,
+    /// Full ribbon, or the compact one-row ribbon for embedders with little room ([`RibbonLayout`]).
+    pub ribbon_layout: RibbonLayout,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
@@ -472,6 +509,7 @@ impl WordApp {
             previews: previews::Previews::default(),
             integrated_titlebar: false,
             show_title_bar: true,
+            ribbon_layout: RibbonLayout::Full,
             control_rx: None,
             shot_token: 0,
             queued_shots: Vec::new(),

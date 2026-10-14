@@ -5,6 +5,8 @@
 //! origin of the embedding page (`https://example.com`). Messages (`window.postMessage`) are
 //! accepted only from `window.parent` at exactly that origin, and sent only to it.
 //!
+//! `&ribbon=compact|full|auto|auto:<points>` picks the ribbon (default `auto`: the compact one-row
+//! ribbon while the frame is narrower than 1000 pt, the full ribbon when it is wider).
 //! `&lang=<tag>` (e.g. `zh-Hans`, `en`) sets the interface language, as the embedding page shows its
 //! own; the browser's language is used without it. Embedded, the title bar row (quick access,
 //! command search, account) is hidden: the host page has its own header.
@@ -17,6 +19,7 @@
 //!   web build embeds no CJK face and can't read system fonts) — and, unless `document: false`,
 //!   for documents too, added as File › Options › Add Font does and kept in the browser. The
 //!   interface needs it on every visit; documents get it back from the browser's storage.
+//! - `{type: "ribbon", layout}`: switch the ribbon (`compact`, `full`, `auto`, `auto:<points>`).
 //! - `{type: "save"}`: File › Save.
 //! - `{type: "save-failed"}`: the host could not keep the last save; the document counts as
 //!   unsaved again.
@@ -44,12 +47,15 @@ pub enum Request {
     Font { name: String, bytes: Vec<u8>, document: bool },
     Save,
     SaveFailed,
+    Ribbon(wordcraft_ui_egui::RibbonLayout),
 }
 
 pub struct Host {
     origin: String,
     /// The interface language the host asked for (`&lang=`).
     pub lang: Option<String>,
+    /// The ribbon the host asked for (`&ribbon=`; `auto` without it).
+    pub ribbon: wordcraft_ui_egui::RibbonLayout,
     requests: RefCell<Vec<Request>>,
     dirty: Cell<Option<bool>>,
 }
@@ -72,13 +78,14 @@ impl Host {
         let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
         let origin = params.get("embed")?;
         let lang = params.get("lang").filter(|l| !l.trim().is_empty());
+        let ribbon = params.get("ribbon").and_then(|r| wordcraft_ui_egui::RibbonLayout::parse(&r)).unwrap_or(wordcraft_ui_egui::RibbonLayout::Auto(1000.0));
         // A wildcard would hand the document to whoever frames the page.
         if origin.is_empty() || origin == "*" || origin == "null" {
             log::error!("embed: an exact origin is required (?embed=https://example.com)");
             return None;
         }
         parent_window()?;
-        Some(Rc::new(Host { origin, lang, requests: RefCell::new(Vec::new()), dirty: Cell::new(None) }))
+        Some(Rc::new(Host { origin, lang, ribbon, requests: RefCell::new(Vec::new()), dirty: Cell::new(None) }))
     }
 
     /// Start accepting the host's messages; each one wakes the app.
@@ -121,6 +128,13 @@ impl Host {
                         return;
                     }
                 }
+                Some("ribbon") => match text(&data, "layout").as_deref().and_then(wordcraft_ui_egui::RibbonLayout::parse) {
+                    Some(layout) => Request::Ribbon(layout),
+                    None => {
+                        log::error!("embed: `ribbon` needs a layout: compact, full, auto or auto:<points>");
+                        return;
+                    }
+                },
                 Some("save") => Request::Save,
                 Some("save-failed") => Request::SaveFailed,
                 _ => return,
