@@ -3359,6 +3359,25 @@ mod tests {
         }
     }
 
+    /// Embedded single-document mode: nothing replaces the host's document except the host's own
+    /// open through the inbox.
+    #[test]
+    fn single_document_refuses_replacing_the_document() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Mine")), Services::default());
+        a.single_document = true;
+        let id = a.session.document_id();
+        for (cmd, params) in [("file.new", json!({})), ("file.open", json!({"path": "/tmp/other.docx"})), ("file.close", json!({})), ("mailings.labels", json!({}))] {
+            assert!(a.run(cmd, params).is_err(), "{cmd} is refused");
+            assert_eq!(a.session.document_id(), id, "{cmd} left the document alone");
+        }
+        // The host's open arrives through the inbox and does replace it.
+        let inbox: Inbox = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        a.services.inbox = Some(inbox.clone());
+        inbox.lock().unwrap().push(("host.txt".into(), b"From the host".to_vec()));
+        a.drain_inbox();
+        assert_ne!(a.session.document_id(), id, "the host's document opened");
+    }
+
     /// Web: a download in a format that doesn't keep everything marked the document saved, so
     /// the prompt and the leave-page guard let it go.
     #[test]
