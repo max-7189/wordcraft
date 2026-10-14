@@ -2548,8 +2548,10 @@ mod tests {
         assert_eq!(compact_fit(1000.0, &w), 4);
         // 24+2 + 24+2 + 124+2 + 50+2 = 230: fits exactly.
         assert_eq!(compact_fit(230.0, &w), 4);
-        // One short: ⋯ (28+2) and the first two (26+26) fit, the font box (126) doesn't.
-        assert_eq!(compact_fit(229.0, &w), 2);
+        // One short: ⋯ (28+2) and the first three (26+26+126 = 208) fit, the size box doesn't.
+        assert_eq!(compact_fit(229.0, &w), 3);
+        // ⋯ and the two buttons (82) fit; the font box would need 208.
+        assert_eq!(compact_fit(150.0, &w), 2);
         assert_eq!(compact_fit(10.0, &w), 0);
     }
 
@@ -2577,8 +2579,17 @@ mod tests {
         for (width, compact) in [(420.0, true), (760.0, true), (1400.0, false)] {
             let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
             app.ribbon_layout = crate::RibbonLayout::Auto(1000.0);
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 300.0)).build_ui(|ui| show(&mut app, ui));
-            h.run_steps(2);
+            // The interface fonts take effect from the next frame: install them, then draw.
+            let mut frames = 0;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 300.0)).build_ui(|ui| {
+                if frames == 0 {
+                    crate::theme::install_fonts(ui.ctx());
+                } else {
+                    show(&mut app, ui);
+                }
+                frames += 1;
+            });
+            h.run_steps(3);
             // Strikethrough is on the full Home tab only; Bold is on both.
             let full = h.query_by_label(tl!("Strikethrough")).is_some();
             let bold = h.query_by_label(tl!("Bold")).is_some();
