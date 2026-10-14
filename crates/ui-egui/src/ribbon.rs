@@ -468,7 +468,8 @@ fn compact(app: &mut WordApp, ui: &mut Ui, t: &Tokens) {
                 if rest.is_empty() {
                     return;
                 }
-                let more = ui.add_sized(vec2(COMPACT_MORE_W - 4.0, 22.0), egui::Button::new("⋯").frame(false)).on_hover_text(tl!("More commands"));
+                // Painted dots: the interface fonts have no ⋯ glyph.
+                let more = crate::widgets::icon_button(ui, "more", tl!("More commands"));
                 egui::Popup::menu(&more).show(|ui| {
                     ui.set_max_width(280.0);
                     ui.horizontal_wrapped(|ui| {
