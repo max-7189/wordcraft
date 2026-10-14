@@ -2573,6 +2573,7 @@ mod tests {
     /// when the window is wide (an expanded pane).
     #[test]
     fn compact_ribbon_draws_one_row_and_auto_switches() {
+        use egui_kittest::kittest::Queryable as _;
         for (width, compact) in [(420.0, true), (760.0, true), (1400.0, false)] {
             let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
             app.ribbon_layout = crate::RibbonLayout::Auto(1000.0);
