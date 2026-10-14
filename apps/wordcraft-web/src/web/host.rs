@@ -27,10 +27,16 @@
 //! WordCraft → host:
 //! - `{type: "ready"}` once the app runs (send `open` after it); `{type: "error", message}` when it
 //!   could not start (no WebGPU or WebGL2 — `?webgl` may help where WebGPU misbehaves);
+//! - `{type: "opened", documentId}` once a document the host sent is open;
 //! - `{type: "dirty", dirty}` whenever "has unsaved changes" flips;
-//! - `{type: "saved", name, bytes}` on every Save of a Word document (Ctrl+S, the ribbon, or a
-//!   `save` request), with the `ArrayBuffer` transferred. Exports and saves in other formats still
-//!   download.
+//! - `{type: "saved", name, bytes, documentId}` on every Save of a Word document (Ctrl+S, the
+//!   ribbon, or a `save` request), with the `ArrayBuffer` transferred. Exports and saves in other
+//!   formats still download. `documentId` names the open document (as in `opened`): a host can
+//!   refuse a save of anything but the document it sent.
+//!
+//! Embedded, the app is a single-document editor (`WordApp::single_document`): New, Open, Close,
+//! templates, Share and Zotero are not offered, the file picker and dropped files don't open
+//! documents, and the host's font is added without a status message.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -59,6 +65,8 @@ pub struct Host {
     pub ribbon: wordcraft_ui_egui::RibbonLayout,
     requests: RefCell<Vec<Request>>,
     dirty: Cell<Option<bool>>,
+    /// The open document's id (`Session::document_id`), kept current by the shell every frame.
+    pub document: Cell<u64>,
 }
 
 fn parent_window() -> Option<web_sys::Window> {
@@ -86,7 +94,7 @@ impl Host {
             return None;
         }
         parent_window()?;
-        Some(Rc::new(Host { origin, lang, ribbon, requests: RefCell::new(Vec::new()), dirty: Cell::new(None) }))
+        Some(Rc::new(Host { origin, lang, ribbon, requests: RefCell::new(Vec::new()), dirty: Cell::new(None), document: Cell::new(0) }))
     }
 
     /// Start accepting the host's messages; each one wakes the app.
@@ -158,6 +166,11 @@ impl Host {
         self.post(&[("type", JsValue::from_str("ready"))], None);
     }
 
+    /// A document the host sent is open.
+    pub fn opened(&self, document: u64) {
+        self.post(&[("type", JsValue::from_str("opened")), ("documentId", JsValue::from_str(&document.to_string()))], None);
+    }
+
     /// The app could not start.
     pub fn failed(&self, message: &str) {
         self.post(&[("type", JsValue::from_str("error")), ("message", JsValue::from_str(message))], None);
@@ -180,7 +193,8 @@ impl Host {
         let array = js_sys::Uint8Array::from(bytes);
         let buffer = array.buffer();
         let transfer = js_sys::Array::of1(&buffer);
-        if self.post(&[("type", JsValue::from_str("saved")), ("name", JsValue::from_str(name)), ("bytes", buffer.into())], Some(&transfer)) {
+        let document = JsValue::from_str(&self.document.get().to_string());
+        if self.post(&[("type", JsValue::from_str("saved")), ("name", JsValue::from_str(name)), ("bytes", buffer.into()), ("documentId", document)], Some(&transfer)) {
             Ok(())
         } else {
             Err("the embedding page could not be reached".into())

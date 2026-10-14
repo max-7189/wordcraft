@@ -58,6 +58,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label) in PAGES {
+                // A single-document app (an embedding page) has no other documents to start or open.
+                if app.single_document && matches!(id, "home" | "new" | "open" | "saveAs") {
+                    continue;
+                }
                 let (r, resp) = ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
                 let active = app.ui.backstage_page == id;
@@ -116,6 +120,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+        if app.single_document && matches!(app.ui.backstage_page.as_str(), "home" | "new" | "open" | "saveAs") {
+            app.ui.backstage_page = "info".into();
+        }
         egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
             "home" => home_page(app, ui),
             "new" => new_page(app, ui),

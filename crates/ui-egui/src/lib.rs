@@ -404,6 +404,13 @@ pub struct WordApp {
     pub show_title_bar: bool,
     /// Full ribbon, or the compact one-row ribbon for embedders with little room ([`RibbonLayout`]).
     pub ribbon_layout: RibbonLayout,
+    /// The app edits exactly one document that its host gave it (an embedding page that saves the
+    /// bytes back to where they came from): commands that would replace the document (New, Open,
+    /// Close, templates, mail-merge results) are refused, and Backstage's Home/New/Open/Save As,
+    /// Share and the Zotero tab are hidden. Only the host's own opens (the inbox) may replace it.
+    pub single_document: bool,
+    /// Set while the inbox opens a file the host handed over ([`WordApp::single_document`]).
+    opening_from_inbox: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
@@ -510,6 +517,8 @@ impl WordApp {
             integrated_titlebar: false,
             show_title_bar: true,
             ribbon_layout: RibbonLayout::Full,
+            single_document: false,
+            opening_from_inbox: false,
             control_rx: None,
             shot_token: 0,
             queued_shots: Vec::new(),
@@ -635,6 +644,11 @@ impl WordApp {
         {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
+        }
+        if self.single_document && !self.opening_from_inbox && discards_document(id, &params) {
+            let msg = tl!("Not available here: this editor keeps to the document it was given.").to_string();
+            self.status(msg.clone());
+            return Err(msg);
         }
         if self.session.dirty && discards_document(id, &params) {
             let name =
@@ -1613,7 +1627,10 @@ impl WordApp {
             } else if img {
                 self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
             } else {
-                self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+                self.opening_from_inbox = true;
+                let r = self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
+                self.opening_from_inbox = false;
+                r
             };
             if r.is_ok() {
                 self.ui.backstage = false;

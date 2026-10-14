@@ -73,6 +73,7 @@ pub fn start() {
                     }
                     if let Some(host) = &host {
                         app.show_title_bar = false;
+                        app.single_document = true;
                         app.ribbon_layout = host.ribbon;
                         if let Some(lang) = host.lang.as_deref().and_then(wordcraft_ui_egui::i18n::lang_from_tag)
                             && let Err(e) = app.run("ui.language", serde_json::json!({"value": lang.code()}))
@@ -84,7 +85,7 @@ pub fn start() {
                             Err(e) => log::error!("embed: can't listen to the host: {e}"),
                         }
                     }
-                    Ok(Box::new(WebShell { app, inbox, saves, host, ui_fonts: Vec::new() }))
+                    Ok(Box::new(WebShell { app, inbox, saves, host, ui_fonts: Vec::new(), awaiting_open: None, quiet_font: false }))
                 }),
             )
             .await;
@@ -115,6 +116,10 @@ struct WebShell {
     host: Option<Rc<host::Host>>,
     /// Interface fallback faces from the host (name, bytes), kept installed ([`WebShell::keep_ui_fonts`]).
     ui_fonts: Vec<(String, &'static [u8])>,
+    /// The document id before a host `open`, until another document has opened ([`host::Host::opened`]).
+    awaiting_open: Option<u64>,
+    /// A host font went to the inbox this pass: its "Added …" status message is not shown.
+    quiet_font: bool,
 }
 
 /// Saves the browser's save picker finishes after `download` has returned (#728). The app marks
@@ -149,12 +154,14 @@ impl WebShell {
                 host::Request::Open { name, bytes } => {
                     // The host replaces the document on purpose (a newer version): don't ask to save.
                     self.app.session.dirty = false;
+                    self.awaiting_open = Some(self.app.session.document_id());
                     self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                 }
                 host::Request::Font { name, bytes, document } => {
                     if document {
                         // The inbox adds a font file as Add Font does (and keeps it in the browser).
                         self.inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name.clone(), bytes.clone()));
+                        self.quiet_font = true;
                     }
                     // Lives as long as the page: egui keeps a reference to every installed face.
                     let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
@@ -194,6 +201,13 @@ impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
+            // Embedded, a dropped document must not replace the one the host gave (its Save would
+            // check the other document in as a new version of the host's file); pictures still insert.
+            let lower = f.path().to_string_lossy().to_ascii_lowercase();
+            if self.host.is_some() && !IMAGE_EXTS.iter().any(|e| lower.ends_with(&format!(".{e}"))) && !wordcraft_fonts::is_font_file_name(&lower) {
+                log::warn!("embed: dropped file ignored: {lower}");
+                continue;
+            }
             let inbox = self.inbox.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -211,6 +225,17 @@ impl eframe::App for WebShell {
         self.serve_host();
         self.keep_ui_fonts(ctx);
         self.app.logic(ctx);
+        if let Some(host) = &self.host {
+            let document = self.app.session.document_id();
+            host.document.set(document);
+            if self.awaiting_open.is_some_and(|before| before != document) {
+                self.awaiting_open = None;
+                host.opened(document);
+            }
+            if std::mem::take(&mut self.quiet_font) {
+                self.app.status_msg = None;
+            }
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -273,8 +298,14 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Rc<P
     let open_inbox = inbox.clone();
     let save_ctx = ctx.clone();
     let save_host = host.clone();
+    let embedded = host.is_some();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
+            // Embedded, the host owns the document: File › Open (Ctrl+O) has nothing to pick.
+            if embedded && !matches!(purpose, "picture" | "font" | "recipients") {
+                log::warn!("embed: opening another document is not available here");
+                return;
+            }
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             let dialog = if purpose == "picture" {
